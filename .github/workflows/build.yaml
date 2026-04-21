@@ -24,6 +24,14 @@ jobs:
           arch: x64
 
       # ----------------------------
+      # ASEPRITE SOURCE
+      # ----------------------------
+      - name: Clone Aseprite
+        run: |
+          git clone --recursive https://github.com/aseprite/aseprite.git
+
+
+      # ----------------------------
       # SKIA (STRICT VALIDATION)
       # ----------------------------
       - name: Download Skia (Aseprite-compatible)
@@ -32,6 +40,7 @@ jobs:
           cd C:\deps
           curl -L -o skia.zip https://github.com/aseprite/skia/releases/download/m124-08a5439/Skia-Windows-Release-x64.zip
           powershell Expand-Archive skia.zip -DestinationPath C:\deps\skia
+          dir C:\deps\skia
 
       - name: Validate Skia structure (FAIL FAST)
         run: |
@@ -45,12 +54,6 @@ jobs:
             exit 1
           }
 
-      # ----------------------------
-      # ASEPRITE SOURCE
-      # ----------------------------
-      - name: Clone Aseprite
-        run: |
-          git clone --recursive https://github.com/aseprite/aseprite.git
 
       # ----------------------------
       # CONFIGURE
