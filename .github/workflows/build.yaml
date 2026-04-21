@@ -6,72 +6,72 @@ on:
     tags:
       - "v*"
 
-env:
-  ASEPRITE_VERSION: v1.3.17.1
-  SKIA_URL: https://github.com/aseprite/skia/releases/download/m124-08a5439/Skia-Windows-Release-x64.zip
-
 jobs:
   build:
     runs-on: windows-2022
 
     steps:
-      - name: Checkout workflow repo
+      # -----------------------
+      # Checkout (workflow repo)
+      # -----------------------
+      - name: Checkout
         uses: actions/checkout@v4
 
-      - name: Install tools
+      # -----------------------
+      # Install build tools
+      # -----------------------
+      - name: Install dependencies
         run: |
           choco install cmake ninja -y
 
+      # -----------------------
+      # Enable MSVC toolchain
+      # -----------------------
       - name: Setup MSVC
         uses: ilammy/msvc-dev-cmd@v1
         with:
           arch: x64
 
       # -----------------------
-      # PINNED SKIA (CRITICAL)
+      # Pinned Skia (IMPORTANT)
       # -----------------------
-      - name: Download Skia (PINNED)
+      - name: Download Skia
         run: |
           mkdir C:\deps
           cd C:\deps
-          curl -L -o skia.zip $env:SKIA_URL
+          curl -L -o skia.zip https://github.com/aseprite/skia/releases/download/m124-08a5439/Skia-Windows-Release-x64.zip
           powershell Expand-Archive skia.zip -DestinationPath C:\deps\skia
 
       # -----------------------
-      # PINNED ASEPRITE SOURCE
+      # Clone Aseprite
       # -----------------------
-      - name: Clone Aseprite (stable tag)
+      - name: Clone Aseprite
         run: |
           git clone --recursive https://github.com/aseprite/aseprite.git
-          cd aseprite
-          git checkout $env:ASEPRITE_VERSION
-          git submodule update --init --recursive
 
       # -----------------------
-      # CONFIGURE BUILD
+      # Configure (FIXED CMake STYLE)
       # -----------------------
       - name: Configure CMake
         run: |
-          mkdir aseprite\build
-          cd aseprite\build
-          cmake -G Ninja ^
-            -DCMAKE_BUILD_TYPE=RelWithDebInfo ^
-            -DLAF_BACKEND=skia ^
-            -DSKIA_DIR=C:\deps\skia ^
-            -DSKIA_LIBRARY_DIR=C:\deps\skia\out\Release-x64 ^
-            -DSKIA_LIBRARY=C:\deps\skia\out\Release-x64\skia.lib ^
-            ..
+          cmake -G Ninja `
+            -DCMAKE_BUILD_TYPE=RelWithDebInfo `
+            -DLAF_BACKEND=skia `
+            -DSKIA_DIR=C:\deps\skia `
+            -DSKIA_LIBRARY_DIR=C:\deps\skia\out\Release-x64 `
+            -DSKIA_LIBRARY=C:\deps\skia\out\Release-x64\skia.lib `
+            -S aseprite `
+            -B aseprite\build
 
       # -----------------------
-      # BUILD
+      # Build
       # -----------------------
       - name: Build
         run: |
-          cd aseprite\build
-          ninja aseprite
+          cmake --build aseprite\build --target aseprite --config RelWithDebInfo
 
       # -----------------------
-      # PACKAGE
+      # Package
       # -----------------------
       - name: Package
         run: |
@@ -80,14 +80,17 @@ jobs:
           powershell Compress-Archive dist\* aseprite-win.zip
 
       # -----------------------
-      # ARTIFACT + RELEASE
+      # Upload artifact
       # -----------------------
       - name: Upload artifact
         uses: actions/upload-artifact@v4
         with:
-          name: aseprite-stable
+          name: aseprite-build
           path: aseprite-win.zip
 
+      # -----------------------
+      # Create release (optional)
+      # -----------------------
       - name: Create Release
         uses: softprops/action-gh-release@v2
         with:
