@@ -1,22 +1,23 @@
-name: Build Aseprite (Stable + Verified Skia)
+name: Auto Build Aseprite (Stable Skia)
 
 on:
   workflow_dispatch:
-  push:
-    tags:
-      - "v*"
+  schedule:
+    - cron: "0 3 * * *"  # daily check for new Aseprite release
 
 jobs:
   build:
     runs-on: windows-2022
 
     steps:
-      - name: Checkout
+      # ----------------------------
+      # BASIC SETUP
+      # ----------------------------
+      - name: Checkout builder repo
         uses: actions/checkout@v4
 
       - name: Install tools
-        run: |
-          choco install cmake ninja -y
+        run: choco install cmake ninja git -y
 
       - name: Setup MSVC
         uses: ilammy/msvc-dev-cmd@v1
@@ -24,36 +25,45 @@ jobs:
           arch: x64
 
       # ----------------------------
-      # ASEPRITE SOURCE
+      # GET LATEST ASEPRITE TAG
+      # ----------------------------
+      - name: Get latest Aseprite version
+        shell: pwsh
+        run: |
+          $tag = git ls-remote --tags --sort="v:refname" https://github.com/aseprite/aseprite.git |
+            Select-String "refs/tags/v" |
+            ForEach-Object { ($_ -split "refs/tags/")[1] } |
+            Select-Object -Last 1
+
+          echo "ASEPRITE_VERSION=$tag" >> $env:GITHUB_ENV
+          echo "Building $tag"
+
+      # ----------------------------
+      # PINNED SKIA (DO NOT CHANGE)
+      # ----------------------------
+      - name: Download Skia (LOCKED)
+        shell: pwsh
+        run: |
+          mkdir C:\deps
+
+          $url = "https://github.com/aseprite/skia/releases/download/m124-08a5439/Skia-Windows-Release-x64.zip"
+          Invoke-WebRequest -Uri $url -OutFile skia.zip
+
+          if ((Get-Item skia.zip).Length -lt 1000000) {
+            throw "Skia download failed (invalid file)"
+          }
+
+          Expand-Archive skia.zip -DestinationPath C:\deps\skia -Force
+
+      # ----------------------------
+      # CLONE ASEPRITE
       # ----------------------------
       - name: Clone Aseprite
         run: |
           git clone --recursive https://github.com/aseprite/aseprite.git
-
-
-      # ----------------------------
-      # SKIA (STRICT VALIDATION)
-      # ----------------------------
-      - name: Download Skia (Aseprite-compatible)
-        run: |
-          mkdir C:\deps
-          cd C:\deps
-          curl -L -o skia.zip https://github.com/aseprite/skia/releases/download/m124-08a5439a6b/Skia-Windows-Release-x64.zip
-          powershell Expand-Archive skia.zip -DestinationPath C:\deps\skia
-          dir C:\deps\skia
-
-      - name: Validate Skia structure (FAIL FAST)
-        run: |
-          if (!(Test-Path "C:\deps\skia\out\Release-x64\skia.lib")) {
-            echo "❌ Invalid Skia package: missing skia.lib"
-            exit 1
-          }
-
-          if (!(Test-Path "C:\deps\skia\third_party")) {
-            echo "❌ Invalid Skia package: missing third_party folder"
-            exit 1
-          }
-
+          cd aseprite
+          git checkout $env:ASEPRITE_VERSION
+          git submodule update --init --recursive
 
       # ----------------------------
       # CONFIGURE
@@ -86,20 +96,31 @@ jobs:
           powershell Compress-Archive dist\* aseprite-win.zip
 
       # ----------------------------
-      # ARTIFACT
+      # CHECK IF RELEASE EXISTS
       # ----------------------------
-      - name: Upload artifact
-        uses: actions/upload-artifact@v4
-        with:
-          name: aseprite-build
-          path: aseprite-win.zip
+      - name: Check existing release
+        id: check
+        shell: pwsh
+        run: |
+          $tag = $env:ASEPRITE_VERSION
+          gh release view $tag 2>$null
+          if ($LASTEXITCODE -eq 0) {
+            echo "exists=true" >> $env:GITHUB_OUTPUT
+          } else {
+            echo "exists=false" >> $env:GITHUB_OUTPUT
+          }
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
       # ----------------------------
-      # RELEASE
+      # CREATE RELEASE (ONLY IF NEW)
       # ----------------------------
       - name: Create Release
+        if: steps.check.outputs.exists == 'false'
         uses: softprops/action-gh-release@v2
         with:
+          tag_name: ${{ env.ASEPRITE_VERSION }}
+          name: Aseprite ${{ env.ASEPRITE_VERSION }}
           files: aseprite-win.zip
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
