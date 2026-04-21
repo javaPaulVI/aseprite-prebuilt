@@ -1,1 +1,96 @@
+name: Build Aseprite (Stable)
 
+on:
+  workflow_dispatch:
+  push:
+    tags:
+      - "v*"
+
+env:
+  ASEPRITE_VERSION: v1.3.17.1
+  SKIA_URL: https://github.com/aseprite/skia/releases/download/m124-08a5439/Skia-Windows-Release-x64.zip
+
+jobs:
+  build:
+    runs-on: windows-2022
+
+    steps:
+      - name: Checkout workflow repo
+        uses: actions/checkout@v4
+
+      - name: Install tools
+        run: |
+          choco install cmake ninja -y
+
+      - name: Setup MSVC
+        uses: ilammy/msvc-dev-cmd@v1
+        with:
+          arch: x64
+
+      # -----------------------
+      # PINNED SKIA (CRITICAL)
+      # -----------------------
+      - name: Download Skia (PINNED)
+        run: |
+          mkdir C:\deps
+          cd C:\deps
+          curl -L -o skia.zip $env:SKIA_URL
+          powershell Expand-Archive skia.zip -DestinationPath C:\deps\skia
+
+      # -----------------------
+      # PINNED ASEPRITE SOURCE
+      # -----------------------
+      - name: Clone Aseprite (stable tag)
+        run: |
+          git clone --recursive https://github.com/aseprite/aseprite.git
+          cd aseprite
+          git checkout $env:ASEPRITE_VERSION
+          git submodule update --init --recursive
+
+      # -----------------------
+      # CONFIGURE BUILD
+      # -----------------------
+      - name: Configure CMake
+        run: |
+          mkdir aseprite\build
+          cd aseprite\build
+          cmake -G Ninja ^
+            -DCMAKE_BUILD_TYPE=RelWithDebInfo ^
+            -DLAF_BACKEND=skia ^
+            -DSKIA_DIR=C:\deps\skia ^
+            -DSKIA_LIBRARY_DIR=C:\deps\skia\out\Release-x64 ^
+            -DSKIA_LIBRARY=C:\deps\skia\out\Release-x64\skia.lib ^
+            ..
+
+      # -----------------------
+      # BUILD
+      # -----------------------
+      - name: Build
+        run: |
+          cd aseprite\build
+          ninja aseprite
+
+      # -----------------------
+      # PACKAGE
+      # -----------------------
+      - name: Package
+        run: |
+          mkdir dist
+          copy aseprite\build\bin\aseprite.exe dist\
+          powershell Compress-Archive dist\* aseprite-win.zip
+
+      # -----------------------
+      # ARTIFACT + RELEASE
+      # -----------------------
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: aseprite-stable
+          path: aseprite-win.zip
+
+      - name: Create Release
+        uses: softprops/action-gh-release@v2
+        with:
+          files: aseprite-win.zip
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
