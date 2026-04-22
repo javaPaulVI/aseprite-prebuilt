@@ -93,17 +93,16 @@ jobs:
       - name: Configure CMake
         shell: pwsh
         run: |
-          cmake -G Ninja `
-            -DLAF_BACKEND=skia `
-            -DSKIA_DIR="$env:DEPS_DIR\skia" `
-            -S $env:ASEPRITE_DIR `
-            -B $env:BUILD_DIR
+          cd D:/a/aseprite-prebuilt/aseprite-prebuilt/aseprite
+          mkdir build
+          cd build
+          cmake -DCMAKE_BUILD_TYPE=RelWithDebInfo -DLAF_BACKEND=skia -DSKIA_DIR=deps\skia -DSKIA_LIBRARY_DIR=deps\skia\out\Release-x64 -DSKIA_LIBRARY=deps\skia\out\Release-x64\skia.lib -G Ninja ..
 
       # -----------------------------
       # 8. BUILD
       # -----------------------------
       - name: Build
-        run: cmake --build $env:BUILD_DIR --target aseprite -v
+        run: ninja aseprite
 
       # -----------------------------
       # 9. PACKAGE
