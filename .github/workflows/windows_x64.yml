@@ -93,9 +93,8 @@ jobs:
       - name: Configure CMake
         shell: pwsh
         run: |
+          mkdir $env:BUILD_DIR
           cd $env:BUILD_DIR
-          mkdir build
-          cd build
           cmake -DCMAKE_BUILD_TYPE=RelWithDebInfo -DLAF_BACKEND=skia -DSKIA_DIR=deps\skia -DSKIA_LIBRARY_DIR=deps\skia\out\Release-x64 -DSKIA_LIBRARY=deps\skia\out\Release-x64\skia.lib -G Ninja ..
 
       # -----------------------------
