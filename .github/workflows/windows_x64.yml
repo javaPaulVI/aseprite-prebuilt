@@ -51,6 +51,8 @@ jobs:
       - name: Configure
         shell: pwsh
         run: |
+          cd $ASEPRITE_DIR
+          dir
           cmake -G Ninja `
             -DLAF_BACKEND=skia `
             -DSKIA_DIR="$env:DEPS_DIR\skia" `
