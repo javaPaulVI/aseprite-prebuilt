@@ -37,18 +37,30 @@ jobs:
           New-Item -ItemType Directory -Force -Path C:\deps
 
       # ----------------------------
-      # GET ASEPRITE VERSION
+      # CLONE ASEPRITE (FIXED PATH)
       # ----------------------------
-      - name: Get latest Aseprite tag
+      - name: Clone Aseprite
         shell: pwsh
         run: |
-          $tag = git ls-remote --tags --sort="v:refname" https://github.com/aseprite/aseprite.git |
-            Select-String "refs/tags/v" |
-            ForEach-Object { ($_ -split "refs/tags/")[1] } |
-            Select-Object -Last 1
+          git clone --recursive https://github.com/aseprite/aseprite.git $env:ASEPRITE_DIR
+          cd $env:ASEPRITE_DIR
+          git checkout $env:ASEPRITE_VERSION
+          git submodule update --init --recursive
+          dir
 
-          echo "ASEPRITE_VERSION=$tag" >> $env:GITHUB_ENV
-          echo "Building $tag"
+      # ----------------------------
+      # GET ASEPRITE VERSION
+      # ----------------------------
+      #- name: Get latest Aseprite tag
+      #  shell: pwsh
+      #  run: |
+      #    $tag = git ls-remote --tags --sort="v:refname" https://github.com/aseprite/aseprite.git |
+      #      Select-String "refs/tags/v" |
+      #      ForEach-Object { ($_ -split "refs/tags/")[1] } |
+      #      Select-Object -Last 1
+
+      #    echo "ASEPRITE_VERSION=$tag" >> $env:GITHUB_ENV
+      #    echo "Building $tag"
 
       # ----------------------------
       # SKIA (PINNED)
@@ -65,19 +77,7 @@ jobs:
 
           Expand-Archive skia.zip -Force -DestinationPath $env:SKIA_DIR
 
-      # ----------------------------
-      # CLONE ASEPRITE (FIXED PATH)
-      # ----------------------------
-      - name: Clone Aseprite
-        shell: pwsh
-        run: |
-          git clone --recursive https://github.com/aseprite/aseprite.git $env:ASEPRITE_DIR
-          cd $env:ASEPRITE_DIR
-          git checkout $env:ASEPRITE_VERSION
-          git submodule update --init --recursive
-          cd aseprite
-          dir aseprite
-          cd ..
+
 
       # ----------------------------
       # CONFIGURE (NO AMBIGUOUS PATHS)
