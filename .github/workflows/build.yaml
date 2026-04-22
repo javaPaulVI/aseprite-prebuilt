@@ -17,19 +17,6 @@ jobs:
 
     steps:
       # ----------------------------
-      # CLONE ASEPRITE (FIXED PATH)
-      # ----------------------------
-      - name: Clone Aseprite
-        shell: pwsh
-        run: |
-          git clone --recursive https://github.com/aseprite/aseprite.git $env:ASEPRITE_DIR
-          cd $env:ASEPRITE_DIR
-          git checkout $env:ASEPRITE_VERSION
-          git submodule update --init --recursive
-          dir
-
-    
-      # ----------------------------
       # SETUP
       # ----------------------------
       - name: Checkout builder repo
@@ -49,51 +36,100 @@ jobs:
           New-Item -ItemType Directory -Force -Path $env:WORKSPACE
           New-Item -ItemType Directory -Force -Path C:\deps
 
+      # ----------------------------
+      # GET LATEST ASEPRITE TAG
+      # ----------------------------
+      - name: Get latest Aseprite tag
+        id: aseprite
+        shell: pwsh
+        run: |
+          $tag = git ls-remote --tags --sort="v:refname" https://github.com/aseprite/aseprite.git |
+            Select-String "refs/tags/v" |
+            ForEach-Object { ($_ -split "refs/tags/")[1] } |
+            Select-Object -Last 1
 
+          echo "ASEPRITE_VERSION=$tag" >> $env:GITHUB_ENV
+          echo "tag=$tag" >> $env:GITHUB_OUTPUT
+          echo "Latest Aseprite: $tag"
 
       # ----------------------------
-      # GET ASEPRITE VERSION
+      # CHECK IF RELEASE EXISTS
       # ----------------------------
-      #- name: Get latest Aseprite tag
-      #  shell: pwsh
-      #  run: |
-      #    $tag = git ls-remote --tags --sort="v:refname" https://github.com/aseprite/aseprite.git |
-      #      Select-String "refs/tags/v" |
-      #      ForEach-Object { ($_ -split "refs/tags/")[1] } |
-      #      Select-Object -Last 1
+      - name: Check existing release
+        id: check
+        shell: pwsh
+        run: |
+          $tag = "${{ steps.aseprite.outputs.tag }}"
+          gh release view $tag 2>$null
+          if ($LASTEXITCODE -eq 0) {
+            echo "exists=true" >> $env:GITHUB_OUTPUT
+            echo "Release already exists → skipping build"
+          } else {
+            echo "exists=false" >> $env:GITHUB_OUTPUT
+            echo "New version → building"
+          }
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
-      #    echo "ASEPRITE_VERSION=$tag" >> $env:GITHUB_ENV
-      #    echo "Building $tag"
+      # ----------------------------
+      # STOP IF ALREADY BUILT
+      # ----------------------------
+      - name: Stop if already built
+        if: steps.check.outputs.exists == 'true'
+        run: exit 0
 
       # ----------------------------
-      # SKIA (PINNED)
+      # CLONE ASEPRITE
       # ----------------------------
-      - name: Download Skia
+      - name: Clone Aseprite
+        shell: pwsh
+        run: |
+          git clone --recursive https://github.com/aseprite/aseprite.git $env:ASEPRITE_DIR
+          cd $env:ASEPRITE_DIR
+          git checkout $env:ASEPRITE_VERSION
+          git submodule update --init --recursive
+
+      # ----------------------------
+      # SKIA (PINNED + VALIDATED)
+      # ----------------------------
+      - name: Download Skia (pinned m124-08a5439a6b)
         shell: pwsh
         run: |
           $url = "https://github.com/aseprite/skia/releases/download/m124-08a5439a6b/Skia-Windows-Release-x64.zip"
           Invoke-WebRequest -Uri $url -OutFile skia.zip
 
+          if (!(Test-Path skia.zip)) {
+            throw "Skia download failed"
+          }
+
           if ((Get-Item skia.zip).Length -lt 1000000) {
-            throw "Invalid Skia download"
+            throw "Downloaded file is invalid (too small)"
           }
 
           Expand-Archive skia.zip -Force -DestinationPath $env:SKIA_DIR
 
+          if (!(Test-Path "$env:SKIA_DIR\out\Release-x64\skia.lib")) {
+            throw "Missing skia.lib → invalid Skia package"
+          }
 
+          if (!(Test-Path "$env:SKIA_DIR\third_party")) {
+            throw "Missing third_party → incomplete Skia package"
+          }
 
       # ----------------------------
-      # CONFIGURE (NO AMBIGUOUS PATHS)
+      # CONFIGURE
       # ----------------------------
       - name: Configure CMake
         shell: pwsh
         run: |
+          $skia = $env:SKIA_DIR
+
           cmake -G Ninja `
             -DCMAKE_BUILD_TYPE=RelWithDebInfo `
             -DLAF_BACKEND=skia `
-            -DSKIA_DIR=$env:SKIA_DIR `
-            -DSKIA_LIBRARY_DIR=$env:SKIA_DIR\out\Release-x64 `
-            -DSKIA_LIBRARY=$env:SKIA_DIR\out\Release-x64\skia.lib `
+            -DSKIA_DIR="$skia" `
+            -DSKIA_LIBRARY_DIR="$skia\out\Release-x64" `
+            -DSKIA_LIBRARY="$skia\out\Release-x64\skia.lib" `
             -S $env:ASEPRITE_DIR `
             -B $env:BUILD_DIR
 
@@ -115,27 +151,9 @@ jobs:
           Compress-Archive dist\* aseprite-win.zip -Force
 
       # ----------------------------
-      # CHECK RELEASE EXISTS
-      # ----------------------------
-      - name: Check release
-        id: check
-        shell: pwsh
-        run: |
-          $tag = $env:ASEPRITE_VERSION
-          gh release view $tag 2>$null
-          if ($LASTEXITCODE -eq 0) {
-            echo "exists=true" >> $env:GITHUB_OUTPUT
-          } else {
-            echo "exists=false" >> $env:GITHUB_OUTPUT
-          }
-        env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-
-      # ----------------------------
       # CREATE RELEASE
       # ----------------------------
       - name: Create Release
-        if: steps.check.outputs.exists == 'false'
         uses: softprops/action-gh-release@v2
         with:
           tag_name: ${{ env.ASEPRITE_VERSION }}
