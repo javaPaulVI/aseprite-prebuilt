@@ -1,4 +1,4 @@
-name: Windows x64 Aseprite
+name: Aseprite Windows x64 Build
 
 on:
   workflow_call:
@@ -7,92 +7,122 @@ jobs:
   build:
     runs-on: windows-2022
 
+    env:
+      DEPS_DIR: ${{ github.workspace }}\deps
+      ASEPRITE_DIR: ${{ github.workspace }}\aseprite
+      BUILD_DIR: ${{ github.workspace }}\build
+
     steps:
-      # -------------------------
-      # BOOTSTRAP
-      # -------------------------
-      - name: Setup workspace
+      # -----------------------------
+      # 1. GET LATEST STABLE RELEASE
+      # -----------------------------
+      - name: Resolve latest stable Aseprite release
         shell: pwsh
         run: |
-          $env:ASEPRITE_DIR = "$env:GITHUB_WORKSPACE\aseprite"
-          $env:DEPS_DIR = "$env:GITHUB_WORKSPACE\deps"
-          $env:BUILD_DIR = "$env:GITHUB_WORKSPACE\build"
+          $releases = Invoke-RestMethod "https://api.github.com/repos/aseprite/aseprite/releases"
 
-          echo "ASEPRITE_DIR=$env:ASEPRITE_DIR" >> $env:GITHUB_ENV
-          echo "DEPS_DIR=$env:DEPS_DIR" >> $env:GITHUB_ENV
-          echo "BUILD_DIR=$env:BUILD_DIR" >> $env:GITHUB_ENV
+          $stable = $releases |
+            Where-Object { $_.draft -eq $false -and $_.prerelease -eq $false } |
+            Sort-Object published_at -Descending |
+            Select-Object -First 1
 
-          New-Item -ItemType Directory -Force -Path $env:ASEPRITE_DIR
-          New-Item -ItemType Directory -Force -Path $env:DEPS_DIR
-          New-Item -ItemType Directory -Force -Path $env:BUILD_DIR
+          if (-not $stable) { throw "No stable release found" }
 
-      # -------------------------
-      # CLONE
-      # -------------------------
+          echo "ASEPRITE_TAG=$($stable.tag_name)" >> $env:GITHUB_ENV
+          echo "Using: $($stable.tag_name)"
+
+      # -----------------------------
+      # 2. CLONE ASEPRITE
+      # -----------------------------
       - name: Clone Aseprite
         shell: pwsh
         run: |
-          git clone --recursive https://github.com/aseprite/aseprite.git "$env:ASEPRITE_DIR"
+          git clone --recursive https://github.com/aseprite/aseprite.git $env:ASEPRITE_DIR
+          cd $env:ASEPRITE_DIR
+          git checkout $env:ASEPRITE_TAG
 
-          if (!(Test-Path "$env:ASEPRITE_DIR\CMakeLists.txt")) {
-            echo "❌ Invalid clone"
-            exit 1
+          if (!(Test-Path "CMakeLists.txt")) {
+            throw "Missing CMakeLists.txt"
           }
 
-      # -------------------------
-      # SKIA
-      # -------------------------
+      # -----------------------------
+      # 3. RESOLVE SKIA URL
+      # -----------------------------
+      - name: Resolve Skia URL
+        shell: pwsh
+        run: |
+          cd "$env:ASEPRITE_DIR\laf\misc"
+          $url = bash ./skia-url.sh release windows x64
+          echo "SKIA_URL=$url" >> $env:GITHUB_ENV
+
+      # -----------------------------
+      # 4. DOWNLOAD + VALIDATE SKIA
+      # -----------------------------
       - name: Download Skia
         shell: pwsh
         run: |
-          curl -L "https://github.com/aseprite/skia/releases/download/m124-08a5439a6b/Skia-Windows-Release-x64.zip" -o skia.zip
+          Invoke-WebRequest $env:SKIA_URL -OutFile skia.zip
 
-          if ((Get-Item skia.zip).Length -lt 1MB) {
-            throw "Invalid Skia zip"
-          }
+          if (!(Test-Path skia.zip)) { throw "Skia download failed" }
+          if ((Get-Item skia.zip).Length -lt 1MB) { throw "Skia zip corrupted" }
 
+      # -----------------------------
+      # 5. EXTRACT SKIA
+      # -----------------------------
       - name: Extract Skia
         shell: pwsh
         run: |
-          rm -rf "$env:DEPS_DIR\skia"
-          New-Item -ItemType Directory -Force -Path "$env:DEPS_DIR\skia"
+          Remove-Item -Recurse -Force $env:DEPS_DIR\skia -ErrorAction SilentlyContinue
+          New-Item -ItemType Directory -Force $env:DEPS_DIR\skia
 
-          Expand-Archive skia.zip -DestinationPath "$env:DEPS_DIR\skia" -Force
+          Expand-Archive skia.zip -DestinationPath $env:DEPS_DIR\skia -Force
 
           if (!(Test-Path "$env:DEPS_DIR\skia\include")) {
-            echo "❌ Skia invalid"
-            exit 1
+            throw "Invalid Skia structure"
           }
 
-      # -------------------------
-      # INSTALL TOOLS (ONLY NOW)
-      # -------------------------
-      - name: Install tools
-        run: choco install cmake ninja -y
+      # -----------------------------
+      # 6. INSTALL TOOLS
+      # -----------------------------
+      - name: Install build tools
+        run: choco install cmake ninja git -y
 
-      # -------------------------
-      # DEBUG STATE
-      # -------------------------
-      - name: Debug state
-        shell: pwsh
-        run: |
-          echo "ASEPRITE:"
-          dir "$env:ASEPRITE_DIR"
-
-          echo "SKIA:"
-          dir "$env:DEPS_DIR\skia" | Select-Object -First 50
-
-      # -------------------------
-      # CMAKE
-      # -------------------------
-      - name: Configure
+      # -----------------------------
+      # 7. CONFIGURE
+      # -----------------------------
+      - name: Configure CMake
         shell: pwsh
         run: |
           cmake -G Ninja `
             -DLAF_BACKEND=skia `
             -DSKIA_DIR="$env:DEPS_DIR\skia" `
-            -S "$env:ASEPRITE_DIR" `
-            -B "$env:BUILD_DIR"
+            -S $env:ASEPRITE_DIR `
+            -B $env:BUILD_DIR
 
+      # -----------------------------
+      # 8. BUILD
+      # -----------------------------
       - name: Build
         run: cmake --build $env:BUILD_DIR --target aseprite -v
+
+      # -----------------------------
+      # 9. PACKAGE
+      # -----------------------------
+      - name: Package
+        shell: pwsh
+        run: |
+          mkdir dist
+          copy "$env:BUILD_DIR\bin\aseprite.exe" dist\
+          Compress-Archive dist\* aseprite-windows.zip -Force
+
+      # -----------------------------
+      # 10. RELEASE
+      # -----------------------------
+      - name: Publish Release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ env.ASEPRITE_TAG }}
+          name: Aseprite ${{ env.ASEPRITE_TAG }}
+          files: aseprite-windows.zip
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
