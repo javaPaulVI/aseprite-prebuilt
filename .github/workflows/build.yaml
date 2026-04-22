@@ -3,15 +3,21 @@ name: Auto Build Aseprite (Stable Skia)
 on:
   workflow_dispatch:
   schedule:
-    - cron: "0 3 * * *"  # daily check for new Aseprite release
+    - cron: "0 3 * * *"
 
 jobs:
   build:
     runs-on: windows-2022
 
+    env:
+      WORKSPACE: C:\workspace
+      ASEPRITE_DIR: C:\workspace\aseprite
+      BUILD_DIR: C:\workspace\aseprite\build
+      SKIA_DIR: C:\deps\skia
+
     steps:
       # ----------------------------
-      # BASIC SETUP
+      # SETUP
       # ----------------------------
       - name: Checkout builder repo
         uses: actions/checkout@v4
@@ -24,10 +30,16 @@ jobs:
         with:
           arch: x64
 
+      - name: Prepare workspace
+        shell: pwsh
+        run: |
+          New-Item -ItemType Directory -Force -Path $env:WORKSPACE
+          New-Item -ItemType Directory -Force -Path C:\deps
+
       # ----------------------------
-      # GET LATEST ASEPRITE TAG
+      # GET ASEPRITE VERSION
       # ----------------------------
-      - name: Get latest Aseprite version
+      - name: Get latest Aseprite tag
         shell: pwsh
         run: |
           $tag = git ls-remote --tags --sort="v:refname" https://github.com/aseprite/aseprite.git |
@@ -39,66 +51,67 @@ jobs:
           echo "Building $tag"
 
       # ----------------------------
-      # PINNED SKIA (DO NOT CHANGE)
+      # SKIA (PINNED)
       # ----------------------------
-      - name: Download Skia (LOCKED)
+      - name: Download Skia
         shell: pwsh
         run: |
-          mkdir C:\deps
-
-          $url = "https://github.com/aseprite/skia/releases/download/m124-08a5439a6b/Skia-Windows-Release-x64.zip"
+          $url = "https://github.com/aseprite/skia/releases/download/m124-08a5439/Skia-Windows-Release-x64.zip"
           Invoke-WebRequest -Uri $url -OutFile skia.zip
 
           if ((Get-Item skia.zip).Length -lt 1000000) {
-            throw "Skia download failed (invalid file)"
+            throw "Invalid Skia download"
           }
 
-          Expand-Archive skia.zip -DestinationPath C:\deps\skia -Force
+          Expand-Archive skia.zip -Force -DestinationPath $env:SKIA_DIR
 
       # ----------------------------
-      # CLONE ASEPRITE
+      # CLONE ASEPRITE (FIXED PATH)
       # ----------------------------
       - name: Clone Aseprite
+        shell: pwsh
         run: |
-          git clone --recursive https://github.com/aseprite/aseprite.git
-          cd aseprite
+          git clone --recursive https://github.com/aseprite/aseprite.git $env:ASEPRITE_DIR
+          cd $env:ASEPRITE_DIR
           git checkout $env:ASEPRITE_VERSION
           git submodule update --init --recursive
 
       # ----------------------------
-      # CONFIGURE
+      # CONFIGURE (NO AMBIGUOUS PATHS)
       # ----------------------------
       - name: Configure CMake
+        shell: pwsh
         run: |
           cmake -G Ninja `
             -DCMAKE_BUILD_TYPE=RelWithDebInfo `
             -DLAF_BACKEND=skia `
-            -DSKIA_DIR=C:\deps\skia `
-            -DSKIA_LIBRARY_DIR=C:\deps\skia\out\Release-x64 `
-            -DSKIA_LIBRARY=C:\deps\skia\out\Release-x64\skia.lib `
-            -S aseprite `
-            -B aseprite\build
+            -DSKIA_DIR=$env:SKIA_DIR `
+            -DSKIA_LIBRARY_DIR=$env:SKIA_DIR\out\Release-x64 `
+            -DSKIA_LIBRARY=$env:SKIA_DIR\out\Release-x64\skia.lib `
+            -S $env:ASEPRITE_DIR `
+            -B $env:BUILD_DIR
 
       # ----------------------------
       # BUILD
       # ----------------------------
       - name: Build Aseprite
         run: |
-          cmake --build aseprite\build --target aseprite --config RelWithDebInfo
+          cmake --build $env:BUILD_DIR --target aseprite --config RelWithDebInfo
 
       # ----------------------------
       # PACKAGE
       # ----------------------------
       - name: Package
+        shell: pwsh
         run: |
-          mkdir dist
-          copy aseprite\build\bin\aseprite.exe dist\
-          powershell Compress-Archive dist\* aseprite-win.zip
+          New-Item -ItemType Directory -Force -Path dist
+          Copy-Item "$env:BUILD_DIR\bin\aseprite.exe" dist\
+          Compress-Archive dist\* aseprite-win.zip -Force
 
       # ----------------------------
-      # CHECK IF RELEASE EXISTS
+      # CHECK RELEASE EXISTS
       # ----------------------------
-      - name: Check existing release
+      - name: Check release
         id: check
         shell: pwsh
         run: |
@@ -113,7 +126,7 @@ jobs:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
       # ----------------------------
-      # CREATE RELEASE (ONLY IF NEW)
+      # CREATE RELEASE
       # ----------------------------
       - name: Create Release
         if: steps.check.outputs.exists == 'false'
