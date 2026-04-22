@@ -17,6 +17,19 @@ jobs:
 
     steps:
       # ----------------------------
+      # CLONE ASEPRITE (FIXED PATH)
+      # ----------------------------
+      - name: Clone Aseprite
+        shell: pwsh
+        run: |
+          git clone --recursive https://github.com/aseprite/aseprite.git $env:ASEPRITE_DIR
+          cd $env:ASEPRITE_DIR
+          git checkout $env:ASEPRITE_VERSION
+          git submodule update --init --recursive
+          dir
+
+    
+      # ----------------------------
       # SETUP
       # ----------------------------
       - name: Checkout builder repo
@@ -36,17 +49,7 @@ jobs:
           New-Item -ItemType Directory -Force -Path $env:WORKSPACE
           New-Item -ItemType Directory -Force -Path C:\deps
 
-      # ----------------------------
-      # CLONE ASEPRITE (FIXED PATH)
-      # ----------------------------
-      - name: Clone Aseprite
-        shell: pwsh
-        run: |
-          git clone --recursive https://github.com/aseprite/aseprite.git $env:ASEPRITE_DIR
-          cd $env:ASEPRITE_DIR
-          git checkout $env:ASEPRITE_VERSION
-          git submodule update --init --recursive
-          dir
+
 
       # ----------------------------
       # GET ASEPRITE VERSION
