@@ -1,81 +1,39 @@
-name: Aseprite macOS arm64
+name: macOS arm64 Aseprite
 
 on:
   workflow_call:
-  workflow_dispatch:
-
-env:
-  ASEPRITE_DIR: ${{ github.workspace }}/aseprite
-  BUILD_DIR: ${{ github.workspace }}/build
-  DEPS_DIR: ${{ github.workspace }}/deps
 
 jobs:
   build:
     runs-on: macos-14
 
     steps:
-      - name: Debug start
+      - name: Setup
         run: |
-          echo "=== MACOS ARM64 BUILD ==="
-          uname -a
+          mkdir -p aseprite deps build
 
-      # ----------------------------
-      # CLONE ASEPRITE
-      # ----------------------------
-      - name: Clone Aseprite
+      - name: Install tools
+        run: brew install cmake ninja git curl unzip
+
+      - name: Clone
         run: |
-          git clone --recursive https://github.com/aseprite/aseprite.git $ASEPRITE_DIR
-          cd $ASEPRITE_DIR
+          git clone --recursive https://github.com/aseprite/aseprite.git aseprite
+          test -f aseprite/CMakeLists.txt || exit 1
 
-          tag=$(git tag --list "v*" --sort=-v:refname | head -n 1)
-          echo "Selected tag: $tag"
-
-          git checkout "$tag"
-          git submodule update --init --recursive
-
-      # ----------------------------
-      # SKIA URL
-      # ----------------------------
-      - name: Resolve Skia URL
-        id: skia
+      - name: Skia
         run: |
-          cd $ASEPRITE_DIR/laf/misc
-          chmod +x skia-url.sh
+          curl -L "https://github.com/aseprite/skia/releases/download/m124-08a5439a6b/Skia-macOS-Release-arm64.zip" -o skia.zip
+          mkdir -p deps/skia
+          unzip -o skia.zip -d deps/skia
 
-          url=$(./skia-url.sh release macos arm64)
-          echo "url=$url" >> $GITHUB_OUTPUT
-
-      # ----------------------------
-      # SKIA DOWNLOAD + FIXED EXTRACT
-      # ----------------------------
-      - name: Download + Extract Skia
-        run: |
-          set -e
-
-          curl -L "${{ steps.skia.outputs.url }}" -o skia.zip
-
-          rm -rf $DEPS_DIR/skia
-          mkdir -p $DEPS_DIR/skia
-
-          unzip -o skia.zip -d $DEPS_DIR/skia
-
-          echo "=== VERIFY ==="
-          ls -R $DEPS_DIR/skia | head -n 100
-
-      # ----------------------------
-      # CONFIGURE
-      # ----------------------------
-      - name: Configure CMake
+      - name: Configure
         run: |
           cmake -G Ninja \
             -DCMAKE_OSX_ARCHITECTURES=arm64 \
             -DLAF_BACKEND=skia \
-            -DSKIA_DIR=$DEPS_DIR/skia \
-            -S $ASEPRITE_DIR \
-            -B $BUILD_DIR
+            -DSKIA_DIR=$GITHUB_WORKSPACE/deps/skia \
+            -S $GITHUB_WORKSPACE/aseprite \
+            -B $GITHUB_WORKSPACE/build
 
-      # ----------------------------
-      # BUILD
-      # ----------------------------
       - name: Build
-        run: cmake --build $BUILD_DIR --target aseprite -v
+        run: cmake --build build --target aseprite -v
