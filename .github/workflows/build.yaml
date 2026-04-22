@@ -75,6 +75,9 @@ jobs:
           cd $env:ASEPRITE_DIR
           git checkout $env:ASEPRITE_VERSION
           git submodule update --init --recursive
+          cd aseprite
+          dir aseprite
+          cd ..
 
       # ----------------------------
       # CONFIGURE (NO AMBIGUOUS PATHS)
