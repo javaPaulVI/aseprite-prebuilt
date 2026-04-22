@@ -85,7 +85,7 @@ jobs:
       # 6. INSTALL TOOLS
       # -----------------------------
       - name: Install build tools
-        run: choco install cmake ninja git -y
+        run: choco install cmake ninja -y
 
       # -----------------------------
       # 7. CONFIGURE
