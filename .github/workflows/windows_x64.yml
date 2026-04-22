@@ -1,63 +1,98 @@
-name: Windows x64 Build
+name: Windows x64 Aseprite
 
 on:
   workflow_call:
-
-env:
-  ASEPRITE_DIR: ${{ github.workspace }}/aseprite
-  BUILD_DIR: ${{ github.workspace }}/build
-  DEPS_DIR: ${{ github.workspace }}/deps
 
 jobs:
   build:
     runs-on: windows-2022
 
     steps:
-      - name: Debug
+      # -------------------------
+      # BOOTSTRAP
+      # -------------------------
+      - name: Setup workspace
         shell: pwsh
-        run: echo "WINDOWS BUILD START"
+        run: |
+          $env:ASEPRITE_DIR = "$env:GITHUB_WORKSPACE\aseprite"
+          $env:DEPS_DIR = "$env:GITHUB_WORKSPACE\deps"
+          $env:BUILD_DIR = "$env:GITHUB_WORKSPACE\build"
 
-      - name: Install tools
-        run: choco install cmake ninja git -y
+          echo "ASEPRITE_DIR=$env:ASEPRITE_DIR" >> $env:GITHUB_ENV
+          echo "DEPS_DIR=$env:DEPS_DIR" >> $env:GITHUB_ENV
+          echo "BUILD_DIR=$env:BUILD_DIR" >> $env:GITHUB_ENV
 
-      - name: Setup MSVC
-        uses: ilammy/msvc-dev-cmd@v1
-        with:
-          arch: x64
+          New-Item -ItemType Directory -Force -Path $env:ASEPRITE_DIR
+          New-Item -ItemType Directory -Force -Path $env:DEPS_DIR
+          New-Item -ItemType Directory -Force -Path $env:BUILD_DIR
 
+      # -------------------------
+      # CLONE
+      # -------------------------
       - name: Clone Aseprite
-        shell: bash
+        shell: pwsh
         run: |
-          git clone --recursive https://github.com/aseprite/aseprite.git $ASEPRITE_DIR
-          cd $ASEPRITE_DIR
-          tag=$(git tag --list "v*" --sort=-v:refname | head -n 1)
-          git checkout $tag
+          git clone --recursive https://github.com/aseprite/aseprite.git "$env:ASEPRITE_DIR"
 
-      - name: Skia URL
-        id: skia
-        shell: bash
-        run: |
-          cd $ASEPRITE_DIR/laf/misc
-          url=$(./skia-url.sh release windows x64)
-          echo "url=$url" >> $GITHUB_OUTPUT
+          if (!(Test-Path "$env:ASEPRITE_DIR\CMakeLists.txt")) {
+            echo "❌ Invalid clone"
+            exit 1
+          }
 
+      # -------------------------
+      # SKIA
+      # -------------------------
       - name: Download Skia
         shell: pwsh
         run: |
-          mkdir $env:DEPS_DIR
-          Invoke-WebRequest ${{ steps.skia.outputs.url }} -OutFile skia.zip
-          Expand-Archive skia.zip -DestinationPath $env:DEPS_DIR\skia -Force
+          curl -L "https://github.com/aseprite/skia/releases/download/m124-08a5439a6b/Skia-Windows-Release-x64.zip" -o skia.zip
 
+          if ((Get-Item skia.zip).Length -lt 1MB) {
+            throw "Invalid Skia zip"
+          }
+
+      - name: Extract Skia
+        shell: pwsh
+        run: |
+          rm -rf "$env:DEPS_DIR\skia"
+          New-Item -ItemType Directory -Force -Path "$env:DEPS_DIR\skia"
+
+          Expand-Archive skia.zip -DestinationPath "$env:DEPS_DIR\skia" -Force
+
+          if (!(Test-Path "$env:DEPS_DIR\skia\include")) {
+            echo "❌ Skia invalid"
+            exit 1
+          }
+
+      # -------------------------
+      # INSTALL TOOLS (ONLY NOW)
+      # -------------------------
+      - name: Install tools
+        run: choco install cmake ninja -y
+
+      # -------------------------
+      # DEBUG STATE
+      # -------------------------
+      - name: Debug state
+        shell: pwsh
+        run: |
+          echo "ASEPRITE:"
+          dir "$env:ASEPRITE_DIR"
+
+          echo "SKIA:"
+          dir "$env:DEPS_DIR\skia" | Select-Object -First 50
+
+      # -------------------------
+      # CMAKE
+      # -------------------------
       - name: Configure
         shell: pwsh
         run: |
-          cd $ASEPRITE_DIR
-          dir
           cmake -G Ninja `
             -DLAF_BACKEND=skia `
             -DSKIA_DIR="$env:DEPS_DIR\skia" `
-            -S $env:ASEPRITE_DIR `
-            -B $env:BUILD_DIR
+            -S "$env:ASEPRITE_DIR" `
+            -B "$env:BUILD_DIR"
 
       - name: Build
-        run: cmake --build $BUILD_DIR --target aseprite
+        run: cmake --build $env:BUILD_DIR --target aseprite -v
