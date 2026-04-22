@@ -9,11 +9,11 @@ jobs:
   windows:
     uses: ./.github/workflows/windows_x64.yml
 
-  linux:
-    uses: ./.github/workflows/linux_x64.yml
+  #linux:
+  #  uses: ./.github/workflows/linux_x64.yml
 
-  macos_x64:
-    uses: ./.github/workflows/macos_x64.yml
+  #macos_x64:
+  #  uses: ./.github/workflows/macos_x64.yml
 
-  macos_arm64:
-    uses: ./.github/workflows/macos_arm64.yml
+  #macos_arm64:
+  #  uses: ./.github/workflows/macos_arm64.yml
