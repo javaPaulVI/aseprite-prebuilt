@@ -1,28 +1,29 @@
-name: Auto Build Aseprite (Stable Skia)
+name: Aseprite Build (Stable + Skia-matched)
 
 on:
   workflow_dispatch:
   schedule:
     - cron: "0 3 * * *"
 
+env:
+  # =========================
+  # DEBUG TOGGLE (CHANGE THIS)
+  # =========================
+  DEBUG_MODE: "false"
+
+  ASEPRITE_DIR: C:\workspace\aseprite
+  BUILD_DIR: C:\workspace\build
+  DEPS_DIR: C:\deps
+
 jobs:
   build:
     runs-on: windows-2022
 
-    env:
-      WORKSPACE: C:\workspace
-      ASEPRITE_DIR: C:\workspace\aseprite
-      BUILD_DIR: C:\workspace\aseprite\build
-      SKIA_DIR: C:\deps\skia
-
     steps:
-      # ----------------------------
-      # SETUP
-      # ----------------------------
-      - name: Checkout builder repo
-        uses: actions/checkout@v4
-
-      - name: Install tools
+      # -------------------------
+      # SYSTEM
+      # -------------------------
+      - name: Setup tools
         run: choco install cmake ninja git -y
 
       - name: Setup MSVC
@@ -30,134 +31,147 @@ jobs:
         with:
           arch: x64
 
-      - name: Prepare workspace
-        shell: pwsh
-        run: |
-          New-Item -ItemType Directory -Force -Path $env:WORKSPACE
-          New-Item -ItemType Directory -Force -Path C:\deps
-
-      # ----------------------------
-      # GET LATEST ASEPRITE TAG
-      # ----------------------------
-      - name: Get latest Aseprite tag
-        id: aseprite
-        shell: pwsh
-        run: |
-          $tag = git ls-remote --tags --sort="v:refname" https://github.com/aseprite/aseprite.git |
-            Select-String "refs/tags/v" |
-            ForEach-Object { ($_ -split "refs/tags/")[1] } |
-            Select-Object -Last 1
-
-          echo "ASEPRITE_VERSION=$tag" >> $env:GITHUB_ENV
-          echo "tag=$tag" >> $env:GITHUB_OUTPUT
-          echo "Latest Aseprite: $tag"
-
-      # ----------------------------
-      # CHECK IF RELEASE EXISTS
-      # ----------------------------
-      - name: Check existing release
-        id: check
-        shell: pwsh
-        run: |
-          $tag = "${{ steps.aseprite.outputs.tag }}"
-          gh release view $tag 2>$null
-          if ($LASTEXITCODE -eq 0) {
-            echo "exists=true" >> $env:GITHUB_OUTPUT
-            echo "Release already exists → skipping build"
-          } else {
-            echo "exists=false" >> $env:GITHUB_OUTPUT
-            echo "New version → building"
-          }
-        env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-
-      # ----------------------------
-      # STOP IF ALREADY BUILT
-      # ----------------------------
-      - name: Stop if already built
-        if: steps.check.outputs.exists == 'true'
-        run: exit 0
-
-      # ----------------------------
+      # -------------------------
       # CLONE ASEPRITE
-      # ----------------------------
+      # -------------------------
       - name: Clone Aseprite
         shell: pwsh
         run: |
           git clone --recursive https://github.com/aseprite/aseprite.git $env:ASEPRITE_DIR
-          cd $env:ASEPRITE_DIR
-          git checkout $env:ASEPRITE_VERSION
-          git submodule update --init --recursive
 
-      # ----------------------------
-      # SKIA (PINNED + VALIDATED)
-      # ----------------------------
-      - name: Download Skia (pinned m124-08a5439a6b)
+      # -------------------------
+      # RESOLVE ASEPRITE TAG (SOURCE OF TRUTH)
+      # -------------------------
+      - name: Resolve Aseprite Tag
+        id: aseprite
         shell: pwsh
         run: |
-          $url = "https://github.com/aseprite/skia/releases/download/m124-08a5439a6b/Skia-Windows-Release-x64.zip"
-          Invoke-WebRequest -Uri $url -OutFile skia.zip
+          cd $env:ASEPRITE_DIR
 
-          if (!(Test-Path skia.zip)) {
-            throw "Skia download failed"
+          $tag = git tag --list "v*" --sort=-v:refname | Select-Object -First 1
+          if (-not $tag) { throw "No Aseprite tag found" }
+
+          git checkout $tag
+          git submodule update --init --recursive
+
+          Write-Host "Aseprite tag: $tag"
+          echo "tag=$tag" >> $env:GITHUB_OUTPUT
+
+      # -------------------------
+      # DEBUG: ASEPRITE STRUCTURE
+      # -------------------------
+      - name: Debug Aseprite (optional)
+        if: env.DEBUG_MODE == 'true'
+        shell: pwsh
+        run: |
+          Write-Host "=== ASEPRITE TREE ==="
+          Get-ChildItem $env:ASEPRITE_DIR -Recurse -Depth 2
+
+      # -------------------------
+      # READ SKIA TAG (ABSOLUTE SOURCE OF TRUTH)
+      # -------------------------
+      - name: Read Skia Tag
+        shell: pwsh
+        run: |
+          $skiaTag = Get-Content "$env:ASEPRITE_DIR\laf\misc\skia-tag.txt" -Raw
+          $skiaTag = $skiaTag.Trim()
+
+          if (-not $skiaTag) { throw "Missing skia-tag.txt" }
+
+          echo "skia=$skiaTag" >> $env:GITHUB_OUTPUT
+
+      # -------------------------
+      # BUILD SKIA URL
+      # -------------------------
+      - name: Resolve Skia URL
+        id: skia
+        shell: pwsh
+        run: |
+          $tag = "${{ steps.read-skia.outputs.skia }}"
+          $url = "https://github.com/aseprite/skia/releases/download/$tag/Skia-Windows-Release-x64.zip"
+
+          Write-Host "Skia tag: $tag"
+          Write-Host "Skia URL: $url"
+
+          echo "url=$url" >> $env:GITHUB_OUTPUT
+
+      # -------------------------
+      # DOWNLOAD SKIA
+      # -------------------------
+      - name: Download Skia
+        shell: pwsh
+        run: |
+          mkdir $env:DEPS_DIR -Force
+
+          Invoke-WebRequest "${{ steps.skia.outputs.url }}" -OutFile skia.zip
+
+          if ((Get-Item skia.zip).Length -lt 10MB) {
+            throw "Skia download invalid"
           }
 
-          if ((Get-Item skia.zip).Length -lt 1000000) {
-            throw "Downloaded file is invalid (too small)"
-          }
+          Expand-Archive skia.zip -DestinationPath "$env:DEPS_DIR\skia" -Force
 
-          Expand-Archive skia.zip -Force -DestinationPath $env:SKIA_DIR
+      # -------------------------
+      # DEBUG SKIA (OPTIONAL)
+      # -------------------------
+      - name: Debug Skia
+        if: env.DEBUG_MODE == 'true'
+        shell: pwsh
+        run: |
+          Write-Host "=== SKIA CONTENT ==="
+          Get-ChildItem "$env:DEPS_DIR\skia" -Recurse -Depth 2
 
-          if (!(Test-Path "$env:SKIA_DIR\out\Release-x64\skia.lib")) {
-            throw "Missing skia.lib → invalid Skia package"
-          }
-
-          if (!(Test-Path "$env:SKIA_DIR\third_party")) {
-            throw "Missing third_party → incomplete Skia package"
-          }
-
-      # ----------------------------
-      # CONFIGURE
-      # ----------------------------
+      # -------------------------
+      # CONFIGURE BUILD
+      # -------------------------
       - name: Configure CMake
         shell: pwsh
         run: |
-          $skia = $env:SKIA_DIR
-
           cmake -G Ninja `
             -DCMAKE_BUILD_TYPE=RelWithDebInfo `
             -DLAF_BACKEND=skia `
-            -DSKIA_DIR="$skia" `
-            -DSKIA_LIBRARY_DIR="$skia\out\Release-x64" `
-            -DSKIA_LIBRARY="$skia\out\Release-x64\skia.lib" `
+            -DSKIA_DIR="$env:DEPS_DIR\skia" `
+            -DSKIA_LIBRARY_DIR="$env:DEPS_DIR\skia\out\Release-x64" `
+            -DSKIA_LIBRARY="$env:DEPS_DIR\skia\out\Release-x64\skia.lib" `
             -S $env:ASEPRITE_DIR `
             -B $env:BUILD_DIR
 
-      # ----------------------------
+      # -------------------------
       # BUILD
-      # ----------------------------
-      - name: Build Aseprite
+      # -------------------------
+      - name: Build
+        shell: pwsh
         run: |
-          cmake --build $env:BUILD_DIR --target aseprite --config RelWithDebInfo
+          cmake --build $env:BUILD_DIR --config RelWithDebInfo --target aseprite
 
-      # ----------------------------
+      # -------------------------
+      # DEBUG OUTPUT
+      # -------------------------
+      - name: Debug Build Output
+        if: env.DEBUG_MODE == 'true'
+        shell: pwsh
+        run: |
+          Write-Host "=== BIN OUTPUT ==="
+          Get-ChildItem "$env:BUILD_DIR\bin" -Recurse
+
+      # -------------------------
       # PACKAGE
-      # ----------------------------
+      # -------------------------
       - name: Package
         shell: pwsh
         run: |
-          New-Item -ItemType Directory -Force -Path dist
+          mkdir dist -Force
           Copy-Item "$env:BUILD_DIR\bin\aseprite.exe" dist\
           Compress-Archive dist\* aseprite-win.zip -Force
 
-      # ----------------------------
-      # CREATE RELEASE
-      # ----------------------------
+      # -------------------------
+      # RELEASE (MIRROR TAG)
+      # -------------------------
       - name: Create Release
         uses: softprops/action-gh-release@v2
         with:
-          tag_name: ${{ env.ASEPRITE_VERSION }}
-          name: Aseprite ${{ env.ASEPRITE_VERSION }}
+          tag_name: ${{ steps.aseprite.outputs.tag }}
+          name: Aseprite ${{ steps.aseprite.outputs.tag }}
           files: aseprite-win.zip
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
