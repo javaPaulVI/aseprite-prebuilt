@@ -1,4 +1,4 @@
-name: macOS arm64 Aseprite
+name: Aseprite macOS ARM64 Build
 
 on:
   workflow_call:
@@ -8,32 +8,129 @@ jobs:
     runs-on: macos-14
 
     steps:
-      - name: Setup
-        run: |
-          mkdir -p aseprite deps build
-
+      # -----------------------------
+      # 1. INSTALL BASIC TOOLS FIRST
+      # -----------------------------
       - name: Install tools
-        run: brew install cmake ninja git curl unzip
+        run: brew install git cmake ninja curl unzip jq bash
 
-      - name: Clone
+      # -----------------------------
+      # 2. GET LATEST STABLE ASEPRITE RELEASE
+      # -----------------------------
+      - name: Get latest stable release
+        run: |
+          releases=$(curl -s https://api.github.com/repos/aseprite/aseprite/releases)
+
+          tag=$(echo "$releases" | jq -r '
+            map(select(.draft == false and .prerelease == false))
+            | sort_by(.published_at)
+            | reverse
+            | .[0].tag_name
+          ')
+
+          if [ -z "$tag" ]; then
+            echo "No stable release found"
+            exit 1
+          fi
+
+          echo "ASEPRITE_TAG=$tag" >> $GITHUB_ENV
+          echo "Using tag: $tag"
+
+      # -----------------------------
+      # 3. CLONE ASEPRITE AT TAG
+      # -----------------------------
+      - name: Clone Aseprite
         run: |
           git clone --recursive https://github.com/aseprite/aseprite.git aseprite
-          test -f aseprite/CMakeLists.txt || exit 1
+          cd aseprite
+          git checkout $ASEPRITE_TAG
 
-      - name: Skia
+          if [ ! -f "CMakeLists.txt" ]; then
+            echo "Missing CMakeLists.txt"
+            exit 1
+          fi
+
+      # -----------------------------
+      # 4. RESOLVE SKIA URL (ARM64)
+      # -----------------------------
+      - name: Resolve Skia URL
         run: |
-          curl -L "https://github.com/aseprite/skia/releases/download/m124-08a5439a6b/Skia-macOS-Release-arm64.zip" -o skia.zip
-          mkdir -p deps/skia
-          unzip -o skia.zip -d deps/skia
+          cd aseprite/laf/misc
+          chmod +x skia-url.sh
 
-      - name: Configure
+          url=$(./skia-url.sh release macos arm64)
+
+          if [ -z "$url" ]; then
+            echo "Failed to resolve Skia URL"
+            exit 1
+          fi
+
+          echo "SKIA_URL=$url" >> $GITHUB_ENV
+
+      # -----------------------------
+      # 5. DOWNLOAD SKIA
+      # -----------------------------
+      - name: Download Skia
+        run: |
+          curl -L "$SKIA_URL" -o skia.zip
+
+          if [ ! -s skia.zip ]; then
+            echo "Skia download failed or empty"
+            exit 1
+          fi
+
+      # -----------------------------
+      # 6. EXTRACT SKIA (CLEAN STATE)
+      # -----------------------------
+      - name: Extract Skia
+        run: |
+          rm -rf deps/skia
+          mkdir -p deps/skia
+
+          unzip skia.zip -d deps/skia
+
+          if [ ! -d "deps/skia/include" ]; then
+            echo "Invalid Skia structure"
+            exit 1
+          fi
+
+      # -----------------------------
+      # 7. CONFIGURE CMAKE (ARM64)
+      # -----------------------------
+      - name: Configure CMake
         run: |
           cmake -G Ninja \
+            -DCMAKE_BUILD_TYPE=RelWithDebInfo \
             -DCMAKE_OSX_ARCHITECTURES=arm64 \
+            -DCMAKE_OSX_DEPLOYMENT_TARGET=11.0 \
             -DLAF_BACKEND=skia \
-            -DSKIA_DIR=$GITHUB_WORKSPACE/deps/skia \
-            -S $GITHUB_WORKSPACE/aseprite \
-            -B $GITHUB_WORKSPACE/build
+            -DSKIA_DIR="$GITHUB_WORKSPACE/deps/skia" \
+            -S aseprite \
+            -B build
 
+      # -----------------------------
+      # 8. BUILD
+      # -----------------------------
       - name: Build
         run: cmake --build build --target aseprite -v
+
+      # -----------------------------
+      # 9. PACKAGE
+      # -----------------------------
+      - name: Package
+        run: |
+          mkdir dist
+          cp build/bin/aseprite dist/
+          zip -r aseprite-macos-arm64.zip dist
+
+      # -----------------------------
+      # 10. RELEASE
+      # -----------------------------
+      - name: Publish Release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ env.ASEPRITE_TAG }}
+          name: Aseprite ${{ env.ASEPRITE_TAG }} (macOS ARM64)
+          files: aseprite-macos-arm64.zip
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
