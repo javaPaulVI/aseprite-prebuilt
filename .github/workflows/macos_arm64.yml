@@ -1,0 +1,41 @@
+name: macOS arm64 Build
+
+on:
+  workflow_call:
+
+jobs:
+  build:
+    runs-on: macos-14
+
+    steps:
+      - name: Clone Aseprite
+        run: |
+          git clone --recursive https://github.com/aseprite/aseprite.git
+          cd aseprite
+          tag=$(git tag --list "v*" --sort=-v:refname | head -n 1)
+          git checkout $tag
+
+      - name: Skia URL
+        id: skia
+        run: |
+          cd aseprite/laf/misc
+          chmod +x skia-url.sh
+          url=$(./skia-url.sh release macos arm64)
+          echo "url=$url" >> $GITHUB_OUTPUT
+
+      - name: Download Skia
+        run: |
+          curl -L "${{ steps.skia.outputs.url }}" -o skia.zip
+          unzip -o skia.zip -d deps/skia
+
+      - name: Configure
+        run: |
+          cmake -G Ninja \
+            -DCMAKE_OSX_ARCHITECTURES=arm64 \
+            -DLAF_BACKEND=skia \
+            -DSKIA_DIR=deps/skia \
+            -S aseprite \
+            -B build
+
+      - name: Build
+        run: cmake --build build --target aseprite
