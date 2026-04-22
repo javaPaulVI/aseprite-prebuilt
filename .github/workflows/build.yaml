@@ -1,4 +1,4 @@
-name: Aseprite Build (Stable + Skia-matched)
+name: Aseprite CI (Cached Skia + Debug Enabled)
 
 on:
   workflow_dispatch:
@@ -6,172 +6,202 @@ on:
     - cron: "0 3 * * *"
 
 env:
-  # =========================
-  # DEBUG TOGGLE (CHANGE THIS)
-  # =========================
-  DEBUG_MODE: "true"
+  ASEPRITE_DIR: ${{ github.workspace }}/aseprite
+  BUILD_DIR: ${{ github.workspace }}/build
+  DEPS_DIR: ${{ github.workspace }}/deps
 
-  ASEPRITE_DIR: C:\workspace\aseprite
-  BUILD_DIR: C:\workspace\build
-  DEPS_DIR: C:\deps
+  # DEBUG MODE (ON by default)
+  DEBUG: "1"
 
 jobs:
   build:
-    runs-on: windows-2022
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: windows-2022
+            platform: windows
+            arch: x64
+
+          - os: ubuntu-22.04
+            platform: linux
+            arch: x64
+
+          - os: macos-14
+            platform: macos
+            arch: x64
+            cmake_arch: x86_64
+
+          - os: macos-14
+            platform: macos
+            arch: arm64
+            cmake_arch: arm64
+
+    runs-on: ${{ matrix.os }}
 
     steps:
-      # -------------------------
-      # SYSTEM
-      # -------------------------
-      - name: Setup tools
+      # ----------------------------
+      # DEBUG INFO (ALWAYS)
+      # ----------------------------
+      - name: Debug environment
+        shell: bash
+        run: |
+          echo "=== DEBUG MODE ENABLED ==="
+          echo "OS: ${{ matrix.os }}"
+          echo "Platform: ${{ matrix.platform }}"
+          echo "Arch: ${{ matrix.arch }}"
+          echo "Workspace: $GITHUB_WORKSPACE"
+          ls -R .
+
+      # ----------------------------
+      # TOOLS
+      # ----------------------------
+      - name: Install dependencies (Linux)
+        if: matrix.platform == 'linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y cmake ninja-build clang git unzip curl
+
+      - name: Install tools (Windows)
+        if: matrix.platform == 'windows'
         run: choco install cmake ninja git -y
 
-      - name: Setup MSVC
+      - name: Setup MSVC (Windows)
+        if: matrix.platform == 'windows'
         uses: ilammy/msvc-dev-cmd@v1
         with:
           arch: x64
 
-      # -------------------------
+      # ----------------------------
       # CLONE ASEPRITE
-      # -------------------------
+      # ----------------------------
       - name: Clone Aseprite
-        shell: pwsh
+        shell: bash
         run: |
-          git clone --recursive https://github.com/aseprite/aseprite.git $env:ASEPRITE_DIR
+          git clone --recursive https://github.com/aseprite/aseprite.git $ASEPRITE_DIR
+          cd $ASEPRITE_DIR
 
-      # -------------------------
-      # RESOLVE ASEPRITE TAG (SOURCE OF TRUTH)
-      # -------------------------
-      - name: Resolve Aseprite Tag
-        id: aseprite
-        shell: pwsh
-        run: |
-          cd $env:ASEPRITE_DIR
+          echo "=== Git tags ==="
+          git tag --list | tail -n 20
 
-          $tag = git tag --list "v*" --sort=-v:refname | Select-Object -First 1
-          if (-not $tag) { throw "No Aseprite tag found" }
+          # latest stable tag (simple + safe heuristic)
+          tag=$(git tag --list "v*" --sort=-v:refname | head -n 1)
 
+          echo "Selected tag: $tag"
           git checkout $tag
           git submodule update --init --recursive
 
-          Write-Host "Aseprite tag: $tag"
-          echo "tag=$tag" >> $env:GITHUB_OUTPUT
+          echo "ASEPRITE_TAG=$tag" >> $GITHUB_ENV
 
-      # -------------------------
-      # DEBUG: ASEPRITE STRUCTURE
-      # -------------------------
-      - name: Debug Aseprite (optional)
-        if: env.DEBUG_MODE == 'true'
-        shell: pwsh
+      # ----------------------------
+      # SKIA TAG (SOURCE OF TRUTH)
+      # ----------------------------
+      - name: Read Skia tag
+        id: skia_tag
+        shell: bash
         run: |
-          Write-Host "=== ASEPRITE TREE ==="
-          Get-ChildItem $env:ASEPRITE_DIR -Recurse -Depth 2
+          tag=$(cat $ASEPRITE_DIR/laf/misc/skia-tag.txt | xargs)
+          echo "SKIA_TAG=$tag"
+          echo "tag=$tag" >> $GITHUB_OUTPUT
 
-      # -------------------------
-      # READ SKIA TAG (ABSOLUTE SOURCE OF TRUTH)
-      # -------------------------
-      - name: Read Skia Tag
-        shell: pwsh
-        run: |
-          $skiaTag = Get-Content "$env:ASEPRITE_DIR\laf\misc\skia-tag.txt" -Raw
-          $skiaTag = $skiaTag.Trim()
-
-          if (-not $skiaTag) { throw "Missing skia-tag.txt" }
-
-          echo "skia=$skiaTag" >> $env:GITHUB_OUTPUT
-
-      # -------------------------
-      # BUILD SKIA URL
-      # -------------------------
+      # ----------------------------
+      # SKIA URL (OFFICIAL SCRIPT)
+      # ----------------------------
       - name: Resolve Skia URL
         id: skia
-        shell: pwsh
+        shell: bash
         run: |
-          $tag = "${{ steps.read-skia.outputs.skia }}"
-          $url = "https://github.com/aseprite/skia/releases/download/$tag/Skia-Windows-Release-x64.zip"
+          cd $ASEPRITE_DIR/laf/misc
+          chmod +x skia-url.sh
 
-          Write-Host "Skia tag: $tag"
-          Write-Host "Skia URL: $url"
+          url=$(./skia-url.sh release ${{ matrix.platform }} ${{ matrix.arch }})
 
-          echo "url=$url" >> $env:GITHUB_OUTPUT
+          echo "SKIA_URL=$url"
+          echo "url=$url" >> $GITHUB_OUTPUT
 
-      # -------------------------
-      # DOWNLOAD SKIA
-      # -------------------------
-      - name: Download Skia
-        shell: pwsh
-        run: |
-          mkdir $env:DEPS_DIR -Force
-
-          Invoke-WebRequest "${{ steps.skia.outputs.url }}" -OutFile skia.zip
-
-          if ((Get-Item skia.zip).Length -lt 10MB) {
-            throw "Skia download invalid"
-          }
-
-          Expand-Archive skia.zip -DestinationPath "$env:DEPS_DIR\skia" -Force
-
-      # -------------------------
-      # DEBUG SKIA (OPTIONAL)
-      # -------------------------
-      - name: Debug Skia
-        if: env.DEBUG_MODE == 'true'
-        shell: pwsh
-        run: |
-          Write-Host "=== SKIA CONTENT ==="
-          Get-ChildItem "$env:DEPS_DIR\skia" -Recurse -Depth 2
-
-      # -------------------------
-      # CONFIGURE BUILD
-      # -------------------------
-      - name: Configure CMake
-        shell: pwsh
-        run: |
-          cmake -G Ninja `
-            -DCMAKE_BUILD_TYPE=RelWithDebInfo `
-            -DLAF_BACKEND=skia `
-            -DSKIA_DIR="$env:DEPS_DIR\skia" `
-            -DSKIA_LIBRARY_DIR="$env:DEPS_DIR\skia\out\Release-x64" `
-            -DSKIA_LIBRARY="$env:DEPS_DIR\skia\out\Release-x64\skia.lib" `
-            -S $env:ASEPRITE_DIR `
-            -B $env:BUILD_DIR
-
-      # -------------------------
-      # BUILD
-      # -------------------------
-      - name: Build
-        shell: pwsh
-        run: |
-          cmake --build $env:BUILD_DIR --config RelWithDebInfo --target aseprite
-
-      # -------------------------
-      # DEBUG OUTPUT
-      # -------------------------
-      - name: Debug Build Output
-        if: env.DEBUG_MODE == 'true'
-        shell: pwsh
-        run: |
-          Write-Host "=== BIN OUTPUT ==="
-          Get-ChildItem "$env:BUILD_DIR\bin" -Recurse
-
-      # -------------------------
-      # PACKAGE
-      # -------------------------
-      - name: Package
-        shell: pwsh
-        run: |
-          mkdir dist -Force
-          Copy-Item "$env:BUILD_DIR\bin\aseprite.exe" dist\
-          Compress-Archive dist\* aseprite-win.zip -Force
-
-      # -------------------------
-      # RELEASE (MIRROR TAG)
-      # -------------------------
-      - name: Create Release
-        uses: softprops/action-gh-release@v2
+      # ----------------------------
+      # CACHE SKIA (CRITICAL)
+      # ----------------------------
+      - name: Cache Skia
+        id: cache-skia
+        uses: actions/cache@v4
         with:
-          tag_name: ${{ steps.aseprite.outputs.tag }}
-          name: Aseprite ${{ steps.aseprite.outputs.tag }}
-          files: aseprite-win.zip
-        env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          path: ${{ env.DEPS_DIR }}/skia
+          key: skia-${{ matrix.platform }}-${{ matrix.arch }}-${{ steps.skia_tag.outputs.tag }}
+
+      # ----------------------------
+      # DOWNLOAD SKIA (ONLY IF MISS)
+      # ----------------------------
+      - name: Download Skia
+        if: steps.cache-skia.outputs.cache-hit != 'true'
+        shell: bash
+        run: |
+          echo "=== DOWNLOADING SKIA ==="
+          mkdir -p $DEPS_DIR
+
+          curl -L "${{ steps.skia.outputs.url }}" -o skia.zip
+          ls -lh skia.zip
+
+          unzip skia.zip -d $DEPS_DIR/skia
+
+          echo "=== SKIA CONTENTS ==="
+          ls -R $DEPS_DIR/skia | head -n 200
+
+      # ----------------------------
+      # SETUP MSVC ENV (MAC/LINUX SAFE NO-OP)
+      # ----------------------------
+      - name: Setup CMake config
+        shell: bash
+        run: |
+          echo "=== CONFIGURE STEP ==="
+
+          if [ "${{ matrix.platform }}" = "windows" ]; then
+            cmake -G Ninja ^
+              -DCMAKE_BUILD_TYPE=RelWithDebInfo ^
+              -DLAF_BACKEND=skia ^
+              -DSKIA_DIR="$DEPS_DIR/skia" ^
+              -DSKIA_LIBRARY_DIR="$DEPS_DIR/skia/out/Release-x64" ^
+              -DSKIA_LIBRARY="$DEPS_DIR/skia/out/Release-x64/skia.lib" ^
+              -S $ASEPRITE_DIR ^
+              -B $BUILD_DIR
+          else
+            cmake -G Ninja \
+              -DCMAKE_BUILD_TYPE=RelWithDebInfo \
+              -DLAF_BACKEND=skia \
+              -DSKIA_DIR=$DEPS_DIR/skia \
+              -DCMAKE_OSX_ARCHITECTURES=${{ matrix.cmake_arch }} \
+              -S $ASEPRITE_DIR \
+              -B $BUILD_DIR
+          fi
+
+      # ----------------------------
+      # BUILD (LOUD DEBUG)
+      # ----------------------------
+      - name: Build Aseprite
+        shell: bash
+        run: |
+          echo "=== BUILD START ==="
+          cmake --build $BUILD_DIR --target aseprite --config RelWithDebInfo -v
+
+      # ----------------------------
+      # PACKAGE
+      # ----------------------------
+      - name: Package
+        shell: bash
+        run: |
+          echo "=== PACKAGING ==="
+          mkdir -p dist
+
+          ls $BUILD_DIR/bin || true
+          cp -r $BUILD_DIR/bin/* dist/ || true
+
+          zip -r aseprite-${{ matrix.platform }}-${{ matrix.arch }}.zip dist
+
+      # ----------------------------
+      # UPLOAD ARTIFACT
+      # ----------------------------
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: aseprite-${{ matrix.platform }}-${{ matrix.arch }}
+          path: aseprite-*.zip
