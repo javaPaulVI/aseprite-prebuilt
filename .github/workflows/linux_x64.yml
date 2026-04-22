@@ -45,7 +45,7 @@ jobs:
 
       - name: Extract Skia
         run: |
-          rm -rf deps/skia
+          Remove-Item -Recurse -Force "$env:DEPS_DIR\skia"
           mkdir -p deps/skia
           unzip skia.zip -d deps/skia
 
