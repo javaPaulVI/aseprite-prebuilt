@@ -112,7 +112,7 @@ jobs:
         run: |
           mkdir dist
           copy "$env:BUILD_DIR\bin\aseprite.exe" dist\
-          Compress-Archive dist\* aseprite-windows.zip -Force
+          Compress-Archive dist\* aseprite-windows-x64.zip -Force
 
       # -----------------------------
       # 10. RELEASE
@@ -121,7 +121,7 @@ jobs:
         uses: softprops/action-gh-release@v2
         with:
           tag_name: ${{ env.ASEPRITE_TAG }}
-          name: Aseprite ${{ env.ASEPRITE_TAG }}
-          files: aseprite-windows.zip
+          name: Aseprite ${{ env.ASEPRITE_TAG }} (only win-x64)
+          files: aseprite-windows-x64.zip
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
