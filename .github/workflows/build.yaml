@@ -46,7 +46,7 @@ jobs:
         run: |
           mkdir C:\deps
 
-          $url = "https://github.com/aseprite/skia/releases/download/m124-08a5439/Skia-Windows-Release-x64.zip"
+          $url = "https://github.com/aseprite/skia/releases/download/m124-08a5439a6b/Skia-Windows-Release-x64.zip"
           Invoke-WebRequest -Uri $url -OutFile skia.zip
 
           if ((Get-Item skia.zip).Length -lt 1000000) {
