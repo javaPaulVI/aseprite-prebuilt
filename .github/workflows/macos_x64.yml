@@ -1,4 +1,4 @@
-name: macOS x64 Aseprite
+name: Aseprite macOS x64 Build
 
 on:
   workflow_call:
@@ -8,40 +8,65 @@ jobs:
     runs-on: macos-14
 
     steps:
-      - name: Setup
-        run: |
-          export ASEPRITE_DIR=$GITHUB_WORKSPACE/aseprite
-          export DEPS_DIR=$GITHUB_WORKSPACE/deps
-          export BUILD_DIR=$GITHUB_WORKSPACE/build
-
-          mkdir -p $ASEPRITE_DIR $DEPS_DIR $BUILD_DIR
-
       - name: Install tools
-        run: brew install cmake ninja git curl unzip
+        run: brew install git cmake ninja curl unzip jq
+
+      - name: Get latest stable release
+        run: |
+          releases=$(curl -s https://api.github.com/repos/aseprite/aseprite/releases)
+
+          tag=$(echo "$releases" | jq -r '
+            map(select(.draft==false and .prerelease==false))
+            | sort_by(.published_at)
+            | reverse
+            | .[0].tag_name
+          ')
+
+          echo "ASEPRITE_TAG=$tag" >> $GITHUB_ENV
 
       - name: Clone
         run: |
           git clone --recursive https://github.com/aseprite/aseprite.git aseprite
-          test -f aseprite/CMakeLists.txt || exit 1
+          cd aseprite
+          git checkout $ASEPRITE_TAG
 
-      - name: Skia
+      - name: Resolve Skia URL
         run: |
-          curl -L "https://github.com/aseprite/skia/releases/download/m124-08a5439a6b/Skia-macOS-Release-x64.zip" -o skia.zip
+          cd aseprite/laf/misc
+          chmod +x skia-url.sh
+          url=$(./skia-url.sh release macos x64)
+          echo "SKIA_URL=$url" >> $GITHUB_ENV
+
+      - name: Download Skia
+        run: curl -L "$SKIA_URL" -o skia.zip
+
+      - name: Extract Skia
+        run: |
+          rm -rf deps/skia
           mkdir -p deps/skia
-          unzip -o skia.zip -d deps/skia
-
-      - name: Debug
-        run: |
-          ls aseprite
-          ls deps/skia
+          unzip skia.zip -d deps/skia
 
       - name: Configure
         run: |
           cmake -G Ninja \
             -DLAF_BACKEND=skia \
-            -DSKIA_DIR=$GITHUB_WORKSPACE/deps/skia \
-            -S $GITHUB_WORKSPACE/aseprite \
-            -B $GITHUB_WORKSPACE/build
+            -DSKIA_DIR=deps/skia \
+            -S aseprite \
+            -B build
 
       - name: Build
-        run: cmake --build build --target aseprite -v
+        run: cmake --build build --target aseprite
+
+      - name: Package
+        run: |
+          mkdir dist
+          cp build/bin/aseprite dist/
+          zip -r aseprite-macos.zip dist
+
+      - name: Release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ env.ASEPRITE_TAG }}
+          files: aseprite-macos.zip
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
