@@ -9,7 +9,7 @@ env:
   # =========================
   # DEBUG TOGGLE (CHANGE THIS)
   # =========================
-  DEBUG_MODE: "false"
+  DEBUG_MODE: "true"
 
   ASEPRITE_DIR: C:\workspace\aseprite
   BUILD_DIR: C:\workspace\build
