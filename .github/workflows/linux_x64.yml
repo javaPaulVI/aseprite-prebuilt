@@ -1,45 +1,94 @@
-name: Linux x64 Build
+name: Aseprite Linux x64
 
 on:
   workflow_call:
+  workflow_dispatch:
+
+env:
+  ASEPRITE_DIR: ${{ github.workspace }}/aseprite
+  BUILD_DIR: ${{ github.workspace }}/build
+  DEPS_DIR: ${{ github.workspace }}/deps
 
 jobs:
   build:
     runs-on: ubuntu-22.04
 
     steps:
-      - name: Install deps
+      - name: Debug start
+        run: |
+          echo "=== LINUX BUILD START ==="
+          pwd
+          ls -la
+
+      - name: Install dependencies
         run: |
           sudo apt-get update
           sudo apt-get install -y cmake ninja-build clang git curl unzip
 
+      # ----------------------------
+      # CLONE ASEPRITE
+      # ----------------------------
       - name: Clone Aseprite
         run: |
-          git clone --recursive https://github.com/aseprite/aseprite.git
-          cd aseprite
-          tag=$(git tag --list "v*" --sort=-v:refname | head -n 1)
-          git checkout $tag
+          git clone --recursive https://github.com/aseprite/aseprite.git $ASEPRITE_DIR
+          cd $ASEPRITE_DIR
 
-      - name: Skia URL
+          echo "=== TAGS (latest) ==="
+          git tag --list "v*" | tail -n 10
+
+          tag=$(git tag --list "v*" --sort=-v:refname | head -n 1)
+          echo "Selected tag: $tag"
+
+          git checkout "$tag"
+          git submodule update --init --recursive
+
+      # ----------------------------
+      # SKIA URL
+      # ----------------------------
+      - name: Resolve Skia URL
         id: skia
         run: |
-          cd aseprite/laf/misc
+          cd $ASEPRITE_DIR/laf/misc
           chmod +x skia-url.sh
+
           url=$(./skia-url.sh release linux x64)
+          echo "SKIA_URL=$url"
           echo "url=$url" >> $GITHUB_OUTPUT
 
-      - name: Download Skia
+      # ----------------------------
+      # SKIA DOWNLOAD + FIXED EXTRACT
+      # ----------------------------
+      - name: Download + Extract Skia
         run: |
-          curl -L "${{ steps.skia.outputs.url }}" -o skia.zip
-          unzip -o skia.zip -d deps/skia
+          set -e
 
-      - name: Configure
+          echo "=== DOWNLOADING SKIA ==="
+          curl -L "${{ steps.skia.outputs.url }}" -o skia.zip
+
+          echo "=== PREPARING DIR ==="
+          rm -rf $DEPS_DIR/skia
+          mkdir -p $DEPS_DIR/skia
+
+          echo "=== EXTRACTING ==="
+          unzip -o skia.zip -d $DEPS_DIR/skia
+
+          echo "=== VERIFY SKIA ==="
+          ls -R $DEPS_DIR/skia | head -n 100
+
+      # ----------------------------
+      # CONFIGURE
+      # ----------------------------
+      - name: Configure CMake
         run: |
           cmake -G Ninja \
             -DLAF_BACKEND=skia \
-            -DSKIA_DIR=deps/skia \
-            -S aseprite \
-            -B build
+            -DSKIA_DIR=$DEPS_DIR/skia \
+            -S $ASEPRITE_DIR \
+            -B $BUILD_DIR
 
+      # ----------------------------
+      # BUILD
+      # ----------------------------
       - name: Build
-        run: cmake --build build --target aseprite
+        run: |
+          cmake --build $BUILD_DIR --target aseprite -v
