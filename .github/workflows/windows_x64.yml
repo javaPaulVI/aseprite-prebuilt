@@ -1,0 +1,61 @@
+name: Windows x64 Build
+
+on:
+  workflow_call:
+
+env:
+  ASEPRITE_DIR: ${{ github.workspace }}/aseprite
+  BUILD_DIR: ${{ github.workspace }}/build
+  DEPS_DIR: ${{ github.workspace }}/deps
+
+jobs:
+  build:
+    runs-on: windows-2022
+
+    steps:
+      - name: Debug
+        shell: pwsh
+        run: echo "WINDOWS BUILD START"
+
+      - name: Install tools
+        run: choco install cmake ninja git -y
+
+      - name: Setup MSVC
+        uses: ilammy/msvc-dev-cmd@v1
+        with:
+          arch: x64
+
+      - name: Clone Aseprite
+        shell: bash
+        run: |
+          git clone --recursive https://github.com/aseprite/aseprite.git $ASEPRITE_DIR
+          cd $ASEPRITE_DIR
+          tag=$(git tag --list "v*" --sort=-v:refname | head -n 1)
+          git checkout $tag
+
+      - name: Skia URL
+        id: skia
+        shell: bash
+        run: |
+          cd $ASEPRITE_DIR/laf/misc
+          url=$(./skia-url.sh release windows x64)
+          echo "url=$url" >> $GITHUB_OUTPUT
+
+      - name: Download Skia
+        shell: pwsh
+        run: |
+          mkdir $env:DEPS_DIR
+          Invoke-WebRequest ${{ steps.skia.outputs.url }} -OutFile skia.zip
+          Expand-Archive skia.zip -DestinationPath $env:DEPS_DIR\skia -Force
+
+      - name: Configure
+        shell: pwsh
+        run: |
+          cmake -G Ninja `
+            -DLAF_BACKEND=skia `
+            -DSKIA_DIR="$env:DEPS_DIR\skia" `
+            -S $env:ASEPRITE_DIR `
+            -B $env:BUILD_DIR
+
+      - name: Build
+        run: cmake --build $BUILD_DIR --target aseprite
